@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1f6feb">
+<title>Le mie tessere</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#f4f6fa;color:#222}
+  header{background:#1f6feb;color:#fff;padding:14px 16px;font-size:20px;font-weight:600}
+  main{padding:12px;max-width:520px;margin:auto}
+  .card{background:#fff;border-radius:12px;padding:16px;margin:8px 0;box-shadow:0 1px 3px #0002;font-size:18px;display:flex;justify-content:space-between;align-items:center}
+  button,.btn{background:#1f6feb;color:#fff;border:0;border-radius:10px;padding:12px 16px;font-size:16px;cursor:pointer}
+  button.sec{background:#e5e9f0;color:#222}
+  button.del{background:#d9363e}
+  input[type=text]{width:100%;box-sizing:border-box;padding:12px;font-size:16px;margin:6px 0;border:1px solid #ccd;border-radius:8px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+  #viewer{background:#fff;text-align:center;padding:20px;border-radius:12px}
+  #viewer canvas{max-width:100%;height:auto}
+  .hidden{display:none}
+  #msg{color:#b00;min-height:20px}
+  small{color:#667}
+</style>
+</head>
+<body>
+<header>💳 Le mie tessere</header>
+<main>
+
+<!-- LISTA -->
+<section id="list">
+  <input type="text" id="search" placeholder="Cerca tessera...">
+  <div id="cards"></div>
+  <div class="row">
+    <button id="addBtn">+ Aggiungi tessera</button>
+    <button class="sec" id="expBtn">Esporta</button>
+    <label class="btn sec" style="background:#e5e9f0;color:#222">Importa
+      <input type="file" id="impFile" accept="application/json" hidden></label>
+  </div>
+</section>
+
+<!-- AGGIUNTA -->
+<section id="add" class="hidden">
+  <h3>Nuova tessera</h3>
+  <input type="text" id="name" placeholder="Nome (es. Esselunga)">
+  <div class="row">
+    <label class="btn">📷 Foto alla tessera
+      <input type="file" id="photo" accept="image/*" capture="environment" hidden></label>
+  </div>
+  <input type="text" id="code" placeholder="Codice (letto dalla foto o manuale)" inputmode="text">
+  <div class="row">
+    <label for="fmt"><small>Formato</small></label>
+    <select id="fmt">
+      <option value="CODE_128">CODE 128</option>
+      <option value="EAN_13">EAN-13</option>
+      <option value="EAN_8">EAN-8</option>
+      <option value="CODE_39">CODE 39</option>
+      <option value="ITF">ITF</option>
+      <option value="UPC_A">UPC-A</option>
+      <option value="QR_CODE">QR Code</option>
+      <option value="DATA_MATRIX">DataMatrix</option>
+      <option value="PDF_417">PDF417</option>
+      <option value="AZTEC">Aztec</option>
+    </select>
+  </div>
+  <div id="msg"></div>
+  <div class="row">
+    <button id="saveBtn">Salva</button>
+    <button class="sec" id="cancelBtn">Annulla</button>
+  </div>
+</section>
+
+<!-- VISUALIZZAZIONE -->
+<section id="view" class="hidden">
+  <div id="viewer">
+    <h2 id="vName"></h2>
+    <canvas id="bc"></canvas>
+    <p id="vCode"></p>
+  </div>
+  <div class="row">
+    <button class="sec" id="backBtn">← Indietro</button>
+    <button class="del" id="delBtn">Elimina</button>
+  </div>
+</section>
+
+</main>
+
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bwip-js@4/dist/bwip-js-min.js"></script>
+<script>
+const KEY = 'tessere_v1';
+const BCID = {EAN_13:'ean13',EAN_8:'ean8',CODE_128:'code128',CODE_39:'code39',ITF:'interleaved2of5',
+  UPC_A:'upca',UPC_E:'upce',QR_CODE:'qrcode',DATA_MATRIX:'datamatrix',PDF_417:'pdf417',AZTEC:'azteccode'};
+const $ = id => document.getElementById(id);
+let cards = JSON.parse(localStorage.getItem(KEY) || '[]');
+let current = null, wakeLock = null;
+
+const save = () => localStorage.setItem(KEY, JSON.stringify(cards));
+const show = s => ['list','add','view'].forEach(x => $(x).classList.toggle('hidden', x !== s));
+
+function render(){
+  const q = $('search').value.toLowerCase();
+  $('cards').innerHTML = '';
+  cards.filter(c => c.name.toLowerCase().includes(q))
+       .sort((a,b) => a.name.localeCompare(b.name))
+       .forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<span></span><span>›</span>`;
+    d.firstChild.textContent = c.name;
+    d.onclick = () => open(c);
+    $('cards').appendChild(d);
+  });
+  if(!cards.length) $('cards').innerHTML = '<p><small>Nessuna tessera. Aggiungine una!</small></p>';
+}
+
+async function open(c){
+  current = c; show('view');
+  $('vName').textContent = c.name;
+  $('vCode').textContent = c.code;
+  try{
+    bwipjs.toCanvas('bc', {bcid: BCID[c.format] || 'code128', text: c.code,
+      scale: 4, height: 18, includetext: false, paddingwidth: 10, paddingheight: 10});
+  }catch(e){
+    // fallback: se il formato non è valido per quel codice, usa CODE128
+    bwipjs.toCanvas('bc', {bcid:'code128', text:c.code, scale:4, height:18, paddingwidth:10, paddingheight:10});
+  }
+  try{ wakeLock = await navigator.wakeLock?.request('screen'); }catch(e){}
+}
+
+async function decodePhoto(file){
+  $('msg').textContent = 'Lettura in corso...';
+  const url = URL.createObjectURL(file);
+  try{
+    // 1) BarcodeDetector nativo (Chrome/Android)
+    if('BarcodeDetector' in window){
+      try{
+        const bmp = await createImageBitmap(file);
+        const res = await new BarcodeDetector().detect(bmp);
+        if(res.length){
+          const f = res[0].format.toUpperCase();
+          return {text: res[0].rawValue, format: f};
+        }
+      }catch(e){}
+    }
+    // 2) ZXing (funziona anche su iPhone)
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    const r = await reader.decodeFromImageUrl(url);
+    return {text: r.getText(), format: ZXing.BarcodeFormat[r.getBarcodeFormat()]};
+  }finally{ URL.revokeObjectURL(url); }
+}
+
+$('photo').onchange = async e => {
+  const f = e.target.files[0]; if(!f) return;
+  try{
+    const r = await decodePhoto(f);
+    $('code').value = r.text;
+    const fm = r.format.replace(/-/g,'_');
+    if(BCID[fm]) $('fmt').value = fm;
+    $('msg').style.color = '#080';
+    $('msg').textContent = 'Codice letto ✔ (' + fm + ')';
+  }catch(err){
+    $('msg').style.color = '#b00';
+    $('msg').textContent = 'Codice non riconosciuto: riprova con foto più nitida e vicina, oppure digitalo a mano.';
+  }
+  e.target.value = '';
+};
+
+$('addBtn').onclick = () => { $('name').value=''; $('code').value=''; $('msg').textContent=''; show('add'); };
+$('cancelBtn').onclick = () => show('list');
+$('saveBtn').onclick = () => {
+  const name = $('name').value.trim(), code = $('code').value.trim();
+  if(!name || !code){ $('msg').style.color='#b00'; $('msg').textContent='Nome e codice sono obbligatori.'; return; }
+  cards.push({id: Date.now(), name, code, format: $('fmt').value});
+  save(); render(); show('list');
+};
+$('backBtn').onclick = () => { wakeLock?.release?.(); show('list'); };
+$('delBtn').onclick = () => {
+  if(confirm('Eliminare "' + current.name + '"?')){
+    cards = cards.filter(c => c.id !== current.id); save(); render(); show('list');
+  }
+};
+$('search').oninput = render;
+
+$('expBtn').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(cards,null,2)], {type:'application/json'}));
+  a.download = 'tessere-backup.json'; a.click();
+};
+$('impFile').onchange = async e => {
+  try{
+    const data = JSON.parse(await e.target.files[0].text());
+    if(Array.isArray(data)){ cards = data; save(); render(); }
+  }catch(err){ alert('File non valido'); }
+};
+
+render();
+</script>
+</body>
+</html>
